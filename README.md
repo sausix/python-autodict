@@ -2,7 +2,7 @@
 Handy dictionary like object that saves and restores contents to file.
 
 
-# Requires
+# Requires (all in Python included)
 - pickle
 - json
 - pathlib
@@ -91,6 +91,35 @@ myconf = MyConf("myfile.json")
 
 * `default_content`  # Dictionary which will be copied and used for instances. Keys may be specified as any immutable data type. Constructor kwargs just support strings as keys.
 
+* `expand_home`  # File path containing "~" are expanded to the home directory.
+
+* `auto_cast`  # Default is False: New values for existing keys will be cast to the original data types. If `some_Autodict` has an entry `{"numeric": 1}`, assigning `some_Autodict["numeric"] = "2"` will cast the string into int.
+
+* `noahs_ark_modules`  # Dangerzone. Affects following situation: 
+  * `save_on_del` enabled
+  * Python interpreter is shutting down 
+  * `save` called by the destructor
+  * Save format set to `pickle_binary`
+  * Some classes like `pathlib` are used in the Autodict and want to be pickled.
+  
+  This situation fails because Python has already emptied `sys.modules` and `pickle` can't lookup modules and classes anymore.
+ 
+  Solution is filling `sys.modules` again before pickle dumping. So if you want to pickle `pathlib`, put it into `noahs_ark_modules` like this:
+
+  ```python
+  import pathlib
+  from autodict import Autodict
+
+  class MyConf(Autodict):
+    # These following options are already default!  
+    # save_on_del = True
+    # default_file_format = FileFormat.pickle_binary
+
+    default_content = {"path": pathlib.Path("/tmp")}  # Using pathlib
+    noahs_ark_modules = {"pathlib": pathlib}  # Assign depending modules for dump pickle
+  ```
+
+
 
 # Methods
 * `load()` Reloads data from the file. Unsaved data is lost.
@@ -104,12 +133,26 @@ myconf = MyConf("myfile.json")
 
 
 # Restrictions
-- Pickle mode does not support classes.
+- Pickle mode may not support all classes.
 - JSON mode supports less data types of Python. Values may change or get lost.
 - Use with simple and immutable objects as data. `int, str, float, bool, tuple, bytes, complex, frozenset, Decimal` etc. Mutables like `list, set, bytearray, dict` are supported but `changed` attribute will not work. Use save(force=True) if you save it manually.
 
+# TODOs
+- tests
+- nested autodicts
+- file extenstions
+- subclass name matching
+
 
 # Changelog
+
+## 2020-12-03 v1.2
+- expand_home setting
+- auto_mkdir
+- auto_cast
+- `noahs_ark_modules` workaround for dangerous auto save of objects to pickle on interpreter shutdown
+
+
 ## 2020-11-16 v1.0
 - Implemented json, pickle, class settings
 - Added class level default values

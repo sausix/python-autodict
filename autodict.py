@@ -51,7 +51,7 @@ def _cast(value, totype):
 
 class Autodict(MutableMapping):
     """
-    Persistent dict which syncs it's content automatically with a file.
+    Persistent dict which syncs its content automatically with a file.
 
     Nice for application settings with defaults etc.
 
@@ -80,8 +80,8 @@ class Autodict(MutableMapping):
     # May not be accurate on nested collections or mutables.
     track_changes = True
 
-    # False: Use defaults only if persistent file not found on load
     # True:  Use defaults and update from persistent file if exists
+    # False: Use defaults only if persistent file not found on load
     include_defaults = True
 
     # Default content
@@ -111,7 +111,8 @@ class Autodict(MutableMapping):
         self._fhandle: Optional = None
 
         if file_format:
-            self.default_file_format = file_format  # Set a local instance copy of desired format
+            # Set a local instance copy of desired format
+            self.default_file_format = file_format  
 
         if file is not None:
             # File path given
@@ -162,7 +163,7 @@ class Autodict(MutableMapping):
             self._fhandle = None
 
         if newfile:
-            # New file given. open it.
+            # New file given, open it.
 
             # Check if we have the correct open mode for file type
             if self.default_file_format not in _openflags:
@@ -185,7 +186,7 @@ class Autodict(MutableMapping):
     @property
     def has_mutables(self) -> bool:
         """
-        Returns True is dictionary has at least one mutable object.
+        Returns True if dictionary has at least one mutable object.
         Indicates that content of Autodict may have changed even if changed attribute was not triggered.
         """
         for value in self.data.values():
@@ -209,7 +210,7 @@ class Autodict(MutableMapping):
             # Do a deeper track for changes
 
             if key not in self.data:
-                # Key-Value is new
+                # Key-value is new
                 self.changed = True
 
             if not self.changed:
@@ -257,7 +258,8 @@ class Autodict(MutableMapping):
         return len(self.data)
 
     def __del__(self):
-        self._del = True  # Set flag. Interpreter may shutdown
+        # Set flag. Interpreter may shutdown
+        self._del = True  
 
         if self.save_on_del and self.file:
             self.save(force=True)
@@ -273,7 +275,7 @@ class Autodict(MutableMapping):
         return f"{self.__class__.__name__}('{self.file}': {self.data!r})"
 
     def __str__(self):
-        # pickle here? No.
+        # Pickle here? No.
         return str(self.data)
 
     def items(self):

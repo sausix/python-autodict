@@ -41,17 +41,17 @@ instance = Autodict(
 )
 ```
 
-### file
+`file`:  
 Path to a file (str, bytes or Path from pathlib). May be omitted. Then provide file on load or save methods.
 
-### file_format
-Specify the format of the file on disk from `FileFormat` enum. If omitted, class default `Autodict.default_file_format` will be used.
-- `pickle_human`  # Human readable pickle (v0)
-- `pickle_binary`  # Binary pickle v4 (Python 3.4)
-- `json`  # Compacted Json dump
-- `json_pretty`  # Pretty Json with indents
+`file_format`:  
+Specify the format of the file on disk from `FileFormat` enum. If omitted, class default `Autodict.default_file_format` will be used:
+- `pickle_human`: Human readable pickle (v0)
+- `pickle_binary`: Binary pickle v4 (Python 3.4)
+- `json`: Compacted Json dump
+- `json_pretty`: Pretty Json with indents
 
-### defaults (kwargs)
+`defaults` (kwargs):  
 You may provide keyword args as default values. Keys will be treaten as strings.
 
 # Advanced usage
@@ -69,6 +69,7 @@ Better way is making use of inheritance:
 from autodict import Autodict, FileFormat
 
 class MyConf(Autodict):
+    __slots__ = ()  # Save memory by avoiding extra and unused dict
     default_content = {"type": "configfile", "configfile_version": 2}
     auto_load = False
     default_file_format = FileFormat.json_pretty
@@ -77,25 +78,33 @@ myconf = MyConf("myfile.json")
 ```
 
 # Class defaults
-* `default_file_format`  # Which file format to use for instances without `file_format` specified.
+* `default_file_format`: Which file format to use for instances without `file_format` specified.
 
-* `auto_load`  # Calls `load()` after instantiation if `True`.
+* `auto_load`: Calls `load()` after instantiation if `True`.
 
-* `save_on_del`  # Calls `save(force=True)` right before deconstruction of instance if `True`.
+* `auto_mkdir`: Allowes to create missing parent directories.
 
-* `track_changes`  # Tracks changes on immutable values if `True`. `save()` won't save if no change has made.
+* `parents_create_mode`: Filesystem attributes mode for created directories by `auto_mkdir`.
+
+* `save_on_del`: Calls `save(force=True)` right before deconstruction of instance if `True`.
+
+* `track_changes`: Tracks changes on immutable values if `True`. `save()` won't save if no change has made.
 
 * `include_defaults`:  
   * `False`: Use defaults only if persistent file not found on load.
   * `True`:  Use defaults and update from persistent file if exists.
 
-* `default_content`  # Dictionary which will be copied and used for instances. Keys may be specified as any immutable data type. Constructor kwargs just support strings as keys.
+* `default_content`: Dictionary which will be copied and used for instances. Keys may be specified as any immutable data type. Constructor kwargs just support strings as keys.
 
-* `expand_home`  # File path containing "~" are expanded to the home directory.
+* `expand_home`: File paths containing "`~`" are expanded to the home directory.
 
-* `auto_cast`  # Default is False: New values for existing keys will be cast to the original data types. If `some_Autodict` has an entry `{"numeric": 1}`, assigning `some_Autodict["numeric"] = "2"` will cast the string into int.
+* `auto_cast`: Default is False: New values for existing keys will be cast to the original data types. If `some_Autodict` has an entry `{"numeric": 1}`, assigning `some_Autodict["numeric"] = "2"` will cast the string into int.
 
-* `noahs_ark_modules`  # Dangerzone. Affects following situation: 
+* `bool_false`, `bool_true`: Values which will be interpreted as `False` or `True` on active `auto_cast`. Default: `{False, 0, "0", "n", "no", "false", 0., None}` and `{True, 1, "1", "y", "yes", "true"}`
+
+* `bool_default`: Bool result on unknown types on active `auto_cast`. Default: `False`.
+
+* `noahs_ark_modules`: Dangerzone. Affects following situation:
   * `save_on_del` enabled
   * Python interpreter is shutting down 
   * `save` called by the destructor
@@ -114,27 +123,28 @@ myconf = MyConf("myfile.json")
     # These following options are already default!  
     # save_on_del = True
     # default_file_format = FileFormat.pickle_binary
-
+    __slots__ = ()  # Save memory by avoiding extra and unused dict
     default_content = {"path": pathlib.Path("/tmp")}  # Using pathlib
     noahs_ark_modules = {"pathlib": pathlib}  # Assign depending modules for dump pickle
   ```
 
 
+# Instance attributes
+* `load()`: Reloads data from the file. Unsaved data is lost.
 
-# Methods
-* `load()` Reloads data from the file. Unsaved data is lost.
+* `save()`: Saves current content of Autodict to file.
 
-* `save()` Saves current content of Autodict to file.
+* `path`: Property containing the path to load/save contents to/from. Contains path which was set by init.
 
 * All other methods from `dict`.
 
-# Attributes
-* `changed` Autodict tries to keep track of changed data inside. Unsafe. See restrictions.
+# Properties
+* `changed`: Autodict tries to keep track of changed data inside. Unsafe. See restrictions.
 
 
 # Restrictions
 - Pickle mode may not support all classes.
-- JSON mode supports less data types of Python. Values may change or get lost.
+- JSON mode supports less data types of Python. Values may change or get lost. See `auto_cast`.
 - Use with simple and immutable objects as data. `int, str, float, bool, tuple, bytes, complex, frozenset, Decimal` etc. Mutables like `list, set, bytearray, dict` are supported but `changed` attribute will not work. Use save(force=True) if you save it manually.
 
 # TODOs
@@ -142,9 +152,17 @@ myconf = MyConf("myfile.json")
 - nested autodicts
 - file extenstions
 - subclass name matching
-
+- pathlib and json?
 
 # Changelog
+
+## 2021-02-17 v1.3
+- auto_cast improved for booleans
+- fixed auto_cast was not applied on load()
+- bool_false, bool_true, bool_default
+- slots (reduced memory consumption)
+- parents_create_mode
+
 
 ## 2020-12-03 v1.2
 - expand_home setting

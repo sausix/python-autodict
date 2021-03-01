@@ -1,11 +1,8 @@
 # python-autodict
-Handy dictionary like object that saves and restores contents to file.
+This project aims to provide a simple file storage backend accessable by a dictionary interface. The dictionary like object syncs its contents with a file on disk.  
+Supports Python's pickle and JSON format.
 
-
-# Requires (all in Python included)
-- pickle
-- json
-- pathlib
+Python's standard JSON encoder was improved to support Enums, NamedTuples, Tuples, bytes and Pathlib and some other types.
 
 
 # Basic usage
@@ -52,7 +49,7 @@ Specify the format of the file on disk from `FileFormat` enum. If omitted, class
 - `json_pretty`: Pretty Json with indents
 
 `defaults` (kwargs):  
-You may provide keyword args as default values. Keys will be treaten as strings.
+You may provide keyword args as default values for this instance. Keys will be treaten as strings. Other key types are not supported here due to `**kwargs` nature.
 
 # Advanced usage
 You may change class default settings in the **dirty** way for all instances like this:
@@ -63,21 +60,23 @@ instance = Autodict("myfile")
 ```
 **Just don't!**
 
-Better way is making use of inheritance:
+Better way is making use of inheritance to create specialized classes of autodict:
 
 ```python
 from autodict import Autodict, FileFormat
 
 class MyConf(Autodict):
-    __slots__ = ()  # Save memory by avoiding extra and unused dict
-    default_content = {"type": "configfile", "configfile_version": 2}
-    auto_load = False
-    default_file_format = FileFormat.json_pretty
+    __slots__ = ()  # Save memory by avoiding an extra unused dict
+    default_content = {"type": "configfile", "configfile_version": 2}  # Default for each instance.
+    auto_load = False  # Explicit call to load() preferred.
+    default_file_format = FileFormat.json_pretty  # If you prefer json.
 
 myconf = MyConf("myfile.json")
 ```
 
 # Class defaults
+Alternative Autodict behaviour can be specified by subclassing from Autodict.
+
 * `default_file_format`: Which file format to use for instances without `file_format` specified.
 
 * `auto_load`: Calls `load()` after instantiation if `True`.
@@ -98,15 +97,15 @@ myconf = MyConf("myfile.json")
 
 * `expand_home`: File paths containing "`~`" are expanded to the home directory.
 
-* `auto_cast`: Default is False: New values for existing keys will be cast to the original data types. If `some_Autodict` has an entry `{"numeric": 1}`, assigning `some_Autodict["numeric"] = "2"` will cast the string into int.
+* `auto_cast`: Default is False: New values for existing keys will be cast to the original data types. If `some_Autodict` has an entry `{"numeric": 1}`, assigning `some_Autodict["numeric"] = "2"` will cast the string into int. Effective on restoring original data types from json files. Works on top level items only. Nested dicts won't be checked or cast.
 
 * `bool_false`, `bool_true`: Values which will be interpreted as `False` or `True` on active `auto_cast`. Default: `{False, 0, "0", "n", "no", "false", 0., None}` and `{True, 1, "1", "y", "yes", "true"}`
 
-* `bool_default`: Bool result on unknown types on active `auto_cast`. Default: `False`.
+* `bool_default`: Bool result on unknown types on active `auto_cast`. Default result: `False`.
 
 * `noahs_ark_modules`: Dangerzone. Affects following situation:
   * `save_on_del` enabled
-  * Python interpreter is shutting down 
+  * Python interpreter is shutting down
   * `save` called by the destructor
   * Save format set to `pickle_binary`
   * Some classes like `pathlib` are used in the Autodict and want to be pickled.
@@ -123,7 +122,7 @@ myconf = MyConf("myfile.json")
     # These following options are already default!  
     # save_on_del = True
     # default_file_format = FileFormat.pickle_binary
-    __slots__ = ()  # Save memory by avoiding extra and unused dict
+    __slots__ = ()  # Save memory by avoiding an extra unused dict
     default_content = {"path": pathlib.Path("/tmp")}  # Using pathlib
     noahs_ark_modules = {"pathlib": pathlib}  # Assign depending modules for dump pickle
   ```
@@ -144,17 +143,43 @@ myconf = MyConf("myfile.json")
 
 # Restrictions
 - Pickle mode may not support all classes.
-- JSON mode supports less data types of Python. Values may change or get lost. See `auto_cast`.
+- JSON mode supports less data types of Python. Values may change or get lost. See `auto_cast` and next chapter.
 - Use with simple and immutable objects as data. `int, str, float, bool, tuple, bytes, complex, frozenset, Decimal` etc. Mutables like `list, set, bytearray, dict` are supported but `changed` attribute will not work. Use save(force=True) if you save it manually.
+
+
+# Data type handling in serialisation
+
+| Data type | Pickle | JSON |
+|---|---|---|
+| Pathlib (Path, PurePath)  | Native support | Implemented |
+| Enum | Native support¹ | Implemented² |
+| tuple | Native support | Improved³ |
+| NamedTuple | Native support¹ | Implemented² |
+| date, time, datetime | Native support | Implemented |
+| bytes, bytearray | Native support | Implemented |
+| set, frozenset | Native support | Implemented³ |
+
+
+¹ Relies on the module path of the class as hint. Module containing the class must exist and has been loaded before calling `load()`. Classes may be moved to other modules.  
+
+² Relies primarily on classes used in `default_content` with same key. `save()` will also keep module path as fallback hint. Classes may be moved between modules.  
+
+³ Tuples, set and frozenset are not supported by JSON directly. This implementation encodes them into a list by prepending "&#95;&#95;tuple&#95;&#95;", "&#95;&#95;set&#95;&#95;" or "&#95;&#95;frozenset&#95;&#95;".
+
 
 # TODOs
 - tests
-- nested autodicts
+- nested autodicts?
+- nested dicts with path access?
 - file extenstions
 - subclass name matching
-- pathlib and json?
+
 
 # Changelog
+
+## 2021-02-28 v1.4
+- Implemented better support for Enums, Tuples, NamedTuples, datetime, date, time, bytes, bytearray, set, frozenset and Pathlib for JSON
+
 
 ## 2021-02-17 v1.3
 - auto_cast improved for booleans

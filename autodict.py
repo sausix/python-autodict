@@ -1,9 +1,21 @@
 # -*- coding: utf-8 -*-
 
+"""
+This module offers automtic or transparent serialization from dict to JSON.
+Once created an Autodict instance, you handle it like a dictionary.
+
+Project motivation:
+  - The Python's json package lacks of support for some data types:
+    Enums, Tuples, NamedTuples, datetime, date, time, bytes, bytearray, set, frozenset and Pathlib
+  - (Limited) support of tracking changes
+
+"""
+
 import pickle
 import json
 import pathlib
 import sys
+import re
 from json.encoder import encode_basestring, encode_basestring_ascii, INFINITY, _make_iterencode
 from io import SEEK_END
 from collections.abc import MutableMapping
@@ -11,25 +23,36 @@ from typing import Union, Optional, Type
 from enum import Enum, auto, EnumMeta
 from os import PathLike
 from decimal import Decimal
-from re import compile
 from datetime import date, datetime, time
 
 
-__VERSION__ = "1.4"
+__VERSION__ = "1.4.1"
 __AUTHOR__ = "Adrian Sausenthaler"
 __SOURCE__ = "https://github.com/sausix/python-autodict"
 
+
+class FileFormat(Enum):
+    """
+    Supported serializatiopn types
+    """
+    PICKLE_HUMAN = auto()  # Human readable pickle (v0)
+    PICKLE_BINARY = auto()  # Binary pickle v4 (Python 3.4)
+    JSON = auto()  # Json dump
+    JSON_PRETTY = auto()  # Pretty Json dump
+    # Add others also to _openflags
+
+
 # "<Enum:MyEnum.Member>"
 # "<Enum:Package.Subpackage.MyEnum.Member>"
-_enum_matcher = compile(r"^<Enum:(?:([a-zA-Z0-9_.]*)\.)?([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)>$")
+_enum_matcher = re.compile(r"^<Enum:(?:([a-zA-Z0-9_.]*)\.)?([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)>$")
 
 # "<MyNamedTuple>"
 # "<Package.Subpackage.MyNamedTuple>"
-_nt_matcher = compile(r"^<(?:([a-zA-Z0-9_.]*)\.)?([a-zA-Z0-9_]+)>$")
+_nt_matcher = re.compile(r"^<(?:([a-zA-Z0-9_.]*)\.)?([a-zA-Z0-9_]+)>$")
 
 # "<Path:/tmp>"
 # "<PurePath:/tmp>"
-_path_matcher = compile(r"^<(Path|PurePath):(.*)>$")
+_path_matcher = re.compile(r"^<(Path|PurePath):(.*)>$")
 _path_types_mapping = {
     "Path": pathlib.Path,
     "PurePath": pathlib.PurePath,
@@ -37,7 +60,7 @@ _path_types_mapping = {
 
 # "<datetime:2021-02-28T23:11:37.374773>"
 # "<date:2021-02-28>"
-_date_matcher = compile(r"^<(datetime|date|time):(.*)>$")
+_date_matcher = re.compile(r"^<(datetime|date|time):(.*)>$")
 _date_types_mapping = {
     "datetime": datetime,
     "date": date,
@@ -46,33 +69,24 @@ _date_types_mapping = {
 
 # "<bytes:00AABBCCFF>"
 # "<bytearray:00AABBCCFF>"
-_bytes_matcher = compile(r"^<(bytes|bytearray):([0-9A-Fa-f]*)>$")
+_bytes_matcher = re.compile(r"^<(bytes|bytearray):([0-9A-Fa-f]*)>$")
 _bytes_types_mapping = {
     "bytes": bytes,
     "bytearray": bytearray,
 }
 
-
-class FileFormat(Enum):
-    pickle_human = auto()  # Human readable pickle (v0)
-    pickle_binary = auto()  # Binary pickle v4 (Python 3.4)
-    json = auto()  # Json dump
-    json_pretty = auto()  # Pretty Json dump
-    # Add others also to _openflags
-
-
 IMMUTABLES = (int, str, float, bool, tuple, bytes, complex, frozenset, Decimal)
 MUTABLES_WITH_EQ = (list, set, bytearray, dict)
 
 # These need extra attention on autosave during interpreter shutdown
-_DANGEROUS_OBJECT_PICKLE_FORMATS = (FileFormat.pickle_binary, )
+_DANGEROUS_OBJECT_PICKLE_FORMATS = (FileFormat.PICKLE_BINARY, )
 
 _openflags = {
     # All r+w with creation and no truncation
-    FileFormat.pickle_binary: "ab+",
-    FileFormat.pickle_human: "ab+",
-    FileFormat.json: "a+",
-    FileFormat.json_pretty: "a+",
+    FileFormat.PICKLE_BINARY: "ab+",
+    FileFormat.PICKLE_HUMAN: "ab+",
+    FileFormat.JSON: "a+",
+    FileFormat.JSON_PRETTY: "a+",
 }
 
 
@@ -83,17 +97,18 @@ def _get_class(cls_str: str, member_str: str = None, module_hint: str = None, ma
     if module_hint:
         # Prefer module_hint
         module = sys.modules.get(module_hint)  # or None
-        check_class = getattr(module, cls_str, None)
-        if check_class:
-            if match_type is None or type(check_class) is match_type:
-                return check_class
+        if module:
+            check_class = getattr(module, cls_str, None)
+            if check_class:
+                if match_type is None or type(check_class) is match_type:  # pylint: disable=unidiomatic-typecheck
+                    return check_class
 
-    for module_name, module in sys.modules.copy().items():
+    for module in sys.modules.copy().values():
         check_class = getattr(module, cls_str, None)
         if not check_class:
             continue
 
-        if match_type is None or type(check_class) is match_type:
+        if match_type is None or type(check_class) is match_type:  # pylint: disable=unidiomatic-typecheck
             if member_str:
                 if hasattr(check_class, member_str):
                     return check_class
@@ -117,61 +132,66 @@ def _get_nt_class(value: dict) -> Optional[Type[EnumMeta]]:
 
 
 class JSONSpecialsEncoder(json.JSONEncoder):
-    def default(self, obj):
+    """
+    Encoder subclass to add support for:
+    Enum, tuple, namedtuple, Pathlib, datetime, bytes, bytearray, set, frozenset
+    """
+    def default(self, o):
         """
         Is being called for encoding unknown types.
         """
-        t = type(obj)
+        otype = type(o)
 
-        if type(t) is EnumMeta:
+        if type(otype) is EnumMeta:  # pylint: disable=unidiomatic-typecheck
             # Enum classes
-            if hasattr(t, "__module__"):
-                enum_str = f"<Enum:{t.__module__}.{obj!s}>"
+            if hasattr(otype, "__module__"):
+                enum_str = f"<Enum:{otype.__module__}.{o!s}>"
             else:
-                enum_str = f"<Enum:{obj!s}>"
+                enum_str = f"<Enum:{o!s}>"
 
             if not _enum_matcher.match(enum_str):
                 raise TypeError(f"Enum or member has invalid characters: '{enum_str}'.")
             return enum_str
 
-        if isinstance(obj, tuple):
+        if isinstance(o, tuple):
             # Some kind of tuple
-            if hasattr(obj, "_asdict"):
+            if hasattr(o, "_asdict"):
                 # It's a named tuple!
                 # Save with keywords and tag the object.
-                data = obj._asdict()
+                # noinspection PyProtectedMember
+                data = o._asdict()
 
-                if hasattr(t, "__module__"):
-                    data["__named_tuple__"] = f"<{t.__module__}.{t.__name__}>"
+                if hasattr(otype, "__module__"):
+                    data["__named_tuple__"] = f"<{otype.__module__}.{otype.__name__}>"
                 else:
-                    data["__named_tuple__"] = f"<{t.__name__}>"
+                    data["__named_tuple__"] = f"<{otype.__name__}>"
                 return data
 
             # JSON encoder does not understand tuples anymore.
             # And tuples get converted to lists by default.
             # So let's not drop tuple info and encode it as a tagged list.
-            return ["__tuple__"] + list(obj)
+            return ["__tuple__"] + list(o)
 
-        if isinstance(obj, pathlib.Path):
-            return f"<Path:{obj!s}>"
+        if isinstance(o, pathlib.Path):
+            return f"<Path:{o!s}>"
 
-        if isinstance(obj, pathlib.PurePath):
-            return f"<PurePath:{obj!s}>"
+        if isinstance(o, pathlib.PurePath):
+            return f"<PurePath:{o!s}>"
 
-        if isinstance(obj, (datetime, date, time)):
-            return f"<{type(obj).__name__}:{obj.isoformat()}>"
+        if isinstance(o, (datetime, date, time)):
+            return f"<{type(o).__name__}:{o.isoformat()}>"
 
-        if isinstance(obj, (bytes, bytearray)):
-            return f"<{type(obj).__name__}:{obj.hex()}>"
+        if isinstance(o, (bytes, bytearray)):
+            return f"<{type(o).__name__}:{o.hex()}>"
 
-        if isinstance(obj, set):
-            return ["__set__"] + list(obj)
+        if isinstance(o, set):
+            return ["__set__"] + list(o)
 
-        if isinstance(obj, frozenset):
-            return ["__frozenset__"] + list(obj)
+        if isinstance(o, frozenset):
+            return ["__frozenset__"] + list(o)
 
         # Default conversion with builtin JSONEncoder.default
-        raise TypeError(f"Unknown/unsupported data type for serialization: {obj!r}.")
+        raise TypeError(f"Unknown/unsupported data type for serialization: {o!r}.")
 
     def _create_iterencode(self):
         """
@@ -209,7 +229,7 @@ class JSONSpecialsEncoder(json.JSONEncoder):
             self.key_separator, self.item_separator, self.sort_keys,
             self.skipkeys, False, tuple=type("FakeClass", (), {}))
 
-    def iterencode(self, o, one_shot=False):
+    def iterencode(self, o, _one_shot=False):
         return self._create_iterencode()(o, 0)
 
 
@@ -229,7 +249,7 @@ class Autodict(MutableMapping):
 
     # General settings below.
     # Inherhit this class with other settings or just reassign them on class level before use.
-    default_file_format = FileFormat.pickle_binary
+    default_file_format = FileFormat.PICKLE_BINARY
 
     # Load after class instantiation
     auto_load = True
@@ -266,6 +286,7 @@ class Autodict(MutableMapping):
     bool_true = {True, 1, "1", "y", "yes", "true"}
     bool_default = False  # Bool result on unknown types
 
+    # You may specialize your subclass with an even more modified json encoder
     json_specials_encoder = JSONSpecialsEncoder
 
     # Hack to enable specific classes of modules to be pickled on __del__ after interpreter shutdown.
@@ -273,6 +294,7 @@ class Autodict(MutableMapping):
     # Reference modules like {"pathlib": pathlib} as shown in sys.modules.
     noahs_ark_modules = {}
 
+    # For future:
     # File extension
     # file_extension = "adict"
     # file_extension_force_add = False
@@ -370,7 +392,10 @@ class Autodict(MutableMapping):
         self._fhandle: Optional = None
 
         # Set a local instance copy of desired format
-        self.file_format = file_format or self.default_file_format
+        if file_format:
+            self.file_format = file_format
+        else:
+            self.file_format = self.default_file_format
 
         if file is not None:
             # File path given
@@ -407,10 +432,11 @@ class Autodict(MutableMapping):
 
             if value in cls.bool_false:
                 return False
-            elif value in cls.bool_true:
+
+            if value in cls.bool_true:
                 return True
-            else:
-                return cls.bool_default
+
+            return cls.bool_default
 
         if hasattr(totype, "_asdict"):  # returns
             if fromtype is dict:
@@ -482,13 +508,13 @@ class Autodict(MutableMapping):
             if self.file_format not in _openflags:
                 raise TypeError(f"File mode not found for: {self.file_format!s}")
 
+            # Get correct open flags for format
+            filemode = _openflags[self.file_format]
+
             if self.auto_mkdir:
                 parent = newfile.parent
                 if not parent.exists():
                     parent.mkdir(mode=self.parents_create_mode, parents=True, exist_ok=True)
-
-            # Get correct open flags for format
-            filemode = _openflags[self.file_format]
 
             # Open text modes always as utf8.
             self._fhandle = newfile.open(mode=filemode, encoding=None if "b" in filemode else "utf8")
@@ -543,10 +569,13 @@ class Autodict(MutableMapping):
                     # These types allow comparison.
                     self.changed = existing_value != value
 
+                elif hasattr(existing_value, "__eq__") and hasattr(value, "__eq__"):
+
+                    self.changed = existing_value != value
+
                 else:
                     # Other type. Comparison not possible.
                     # Just handle as changed data.
-                    # TODO: check __eq__?
                     self.changed = True
 
         if self.auto_cast and not done_cast and key in self.data:
@@ -554,8 +583,7 @@ class Autodict(MutableMapping):
             existing_value = self.data[key]
 
             if type(existing_value) is not type(value):
-                cast_to = type(existing_value)
-                value = self._cast(value, cast_to)
+                value = self._cast(value, type(existing_value))
 
         # Update internal dict when
         # - track_changes == False
@@ -600,6 +628,9 @@ class Autodict(MutableMapping):
         return self.data.values()
 
     def load(self, file: Union[PathLike, str, bytes, None] = None):
+        """
+        Load (and overwrite current content) from file or self.file.
+        """
         if file:
             # Update/set file location
             self.file = pathlib.Path(file)
@@ -621,11 +652,11 @@ class Autodict(MutableMapping):
             self._fhandle.seek(0)
 
             # Pickle mode
-            if self.file_format in (FileFormat.pickle_human, FileFormat.pickle_binary):
+            if self.file_format in {FileFormat.PICKLE_HUMAN, FileFormat.PICKLE_BINARY}:
                 self.update(pickle.load(file=self._fhandle))
 
             # Json mode
-            elif self.file_format in (FileFormat.json, FileFormat.json_pretty):
+            elif self.file_format in {FileFormat.JSON, FileFormat.JSON_PRETTY}:
                 self.update(json.load(fp=self._fhandle, object_hook=self.json_specials_decoder))
 
             else:
@@ -633,6 +664,10 @@ class Autodict(MutableMapping):
         self.changed = False
 
     def save(self, file: Union[PathLike, str, bytes, None] = None, force=False):
+        """
+        Save current content to 'file' or drlf.filr if not specified.
+        force=True will force a save in case of track_changes and no change detected.
+        """
         if file:
             # Update/set file location
             self.file = pathlib.Path(file)
@@ -647,6 +682,7 @@ class Autodict(MutableMapping):
 
             if self._del and len(sys.modules) == 0 and self.file_format in _DANGEROUS_OBJECT_PICKLE_FORMATS:
                 # On interpreter exit, we need to use the safer method because sys.modules is already emptied etc.
+                # noinspection PyProtectedMember
                 pdump = pickle._dump
                 sys.modules.update(self.noahs_ark_modules)
 
@@ -655,17 +691,17 @@ class Autodict(MutableMapping):
                 pdump = pickle.dump
 
             # Pickle mode
-            if self.file_format is FileFormat.pickle_human:
+            if self.file_format is FileFormat.PICKLE_HUMAN:
                 pdump(self.data, file=self._fhandle, protocol=0)
 
-            elif self.file_format is FileFormat.pickle_binary:
+            elif self.file_format is FileFormat.PICKLE_BINARY:
                 pdump(self.data, file=self._fhandle, protocol=4)
 
             # Json mode
-            elif self.file_format is FileFormat.json:
+            elif self.file_format is FileFormat.JSON:
                 json.dump(self.data, fp=self._fhandle, cls=self.json_specials_encoder)
 
-            elif self.file_format is FileFormat.json_pretty:
+            elif self.file_format is FileFormat.JSON_PRETTY:
                 json.dump(self.data, fp=self._fhandle, indent=4, cls=self.json_specials_encoder)
 
             else:
